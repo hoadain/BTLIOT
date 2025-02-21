@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản lý bãi đỗ xe</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <h1>Danh sách xe vào/ra</h1>
+    <table border="1">
+        <tr>
+            <th>ID</th>
+            <th>Biển số</th>
+            <th>Thời gian vào</th>
+            <th>Thời gian ra</th>
+            <th>Trạng thái</th>
+            <th>Ảnh</th>
+        </tr>
+        {% for xe in data %}
+        <tr>
+            <td>{{ xe.ID }}</td>
+            <td>{{ xe.BienSo }}</td>
+            <td>{{ xe.ThoiGianVao }}</td>
+            <td>{{ xe.ThoiGianRa if xe.ThoiGianRa else 'Chưa rời bãi' }}</td>
+            <td>{{ xe.TrangThai }}</td>
+            <td>
+                {% if xe.AnhBienSo %}
+                    <img src="data:image/png;base64,{{ xe.AnhBienSo }}" alt="Ảnh biển số" width="200">
+                {% else %}
+                    Không có ảnh
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <h2>Thống kê số lần đỗ xe theo tháng/năm</h2>
+    <table border="1">
+        <tr>
+            <th>Biển số</th>
+            <th>Tháng</th>
+            <th>Năm</th>
+            <th>Số lần đỗ</th>
+        </tr>
+        {% for thongke in thongke_data %}
+        <tr>
+            <td>{{ thongke.BienSo }}</td>
+            <td>{{ thongke.Thang }}</td>
+            <td>{{ thongke.Nam }}</td>
+            <td>{{ thongke.SoLanDo }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>
