@@ -3,158 +3,145 @@ import cv2
 import pytesseract
 import easyocr
 import re
-import pyodbc
 import paho.mqtt.client as mqtt
 import base64
 import numpy as np
-from flask import Flask, render_template
+from flask import Flask, render_template, jsonify, send_file
 from ultralytics import YOLO
-from datetime import datetime, timedelta
+from datetime import datetime
+import mysql.connector
 
-# === CẤU HÌNH MQTT ===
-MQTT_BROKER = "192.168.0.103"
+# Cấu hình MQTT
+MQTT_BROKER = "192.168.0.133"
 MQTT_PORT = 1883
-MQTT_TOPIC = "esp32/camera"
+MQTT_TOPIC_IMAGE = "doxe/cam/image"
 
-# === CẤU HÌNH SQL SERVER ===
-SERVER_NAME = "MSI\\SQLEXPRESS"
-DATABASE_NAME = "QuanLyBaiDoXe"
-db = pyodbc.connect(f"DRIVER={{SQL Server}};SERVER={SERVER_NAME};DATABASE={DATABASE_NAME};Trusted_Connection=yes;")
-cursor = db.cursor()
+app = Flask(__name__)
 
-# === CẤU HÌNH NHẬN DIỆN BIỂN SỐ ===
-model = YOLO(r"D:\zalo\docso\docso\runs\detect\train2\weights\best.pt")
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Kết nối MySQL
+db = mysql.connector.connect(
+    host="localhost",
+    user="hoa",
+    password="12345",
+    database="QuanLyDoXe"
+)
+cursor = db.cursor(dictionary=True)
 
+# Load model YOLO
+model = YOLO(r"D:\\zalo\\docso\\docso\\runs\\detect\\train2\\weights\\best.pt")
+pytesseract.pytesseract.tesseract_cmd = r'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
 
-# === GIẢI MÃ BASE64 & LƯU ẢNH ===
-def save_base64_image(base64_string, folder="images"):
-    if not os.path.exists(folder):
-        os.makedirs(folder)
+latest_image = None
+latest_plate_number = None
 
-    try:
-        image_data = base64.b64decode(base64_string)
-        filename = f"{folder}/plate_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+# Dictionary lưu trữ dữ liệu ảnh bị chia nhỏ
+image_data_buffer = {}
 
-        with open(filename, "wb") as f:
-            f.write(image_data)
+def detect_license_plate(image_data):
+    np_arr = np.frombuffer(image_data, np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    if image is None:
+        return None, None
 
-        return filename  # Trả về đường dẫn ảnh đã lưu
-    except Exception as e:
-        print(f"Lỗi khi giải mã Base64: {e}")
-        return None
-
-
-# === NHẬN DIỆN BIỂN SỐ ===
-def detect_license_plate(image_path):
-    results = model(image_path)
-    image = cv2.imread(image_path)
-    image_info = results[0]
-    boxes = image_info.boxes.data.cpu().numpy()
-
+    results = model(image)
+    boxes = results[0].boxes.data.cpu().numpy()
     plate_number = None
-    for i, box in enumerate(boxes):
+
+    for box in boxes:
         x_min, y_min, x_max, y_max = map(int, box[:4])
         cropped_image = image[y_min:y_max, x_min:x_max]
         gray_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
-        blurred_image = cv2.GaussianBlur(gray_image, (5, 5), 0)
 
-        # Nhận diện bằng Tesseract
-        text = pytesseract.image_to_string(blurred_image, config="--psm 6")
-        text = re.sub(r'[^a-zA-Z0-9]', '', text)
-
-        # Nhận diện bằng EasyOCR
         reader = easyocr.Reader(['en'])
         result_easyocr = reader.readtext(gray_image, detail=0, paragraph=True)
-        easyocr_text = ''.join(re.findall(r'[a-zA-Z0-9]', ''.join(result_easyocr)))
+        text_easyocr = ''.join(re.findall(r'[a-zA-Z0-9]', ''.join(result_easyocr)))
 
-        plate_number = easyocr_text if len(easyocr_text) > len(text) else text
+        text_tesseract = pytesseract.image_to_string(gray_image, config='--psm 7')
+        text_tesseract = ''.join(re.findall(r'[a-zA-Z0-9]', text_tesseract))
 
-    return plate_number
+        plate_number = text_easyocr if len(text_easyocr) > len(text_tesseract) else text_tesseract
 
+    return image, plate_number if plate_number else None
 
-# === LƯU HOẶC CẬP NHẬT BIỂN SỐ VÀO SQL ===
-def save_or_update_sql(plate_number, image_path):
+def save_or_update_sql(plate_number):
     if not plate_number:
-        print("Không có biển số hợp lệ!")
         return
 
-    # Kiểm tra xe có trong hệ thống chưa
-    cursor.execute("SELECT TOP 1 ID, ThoiGianVao, TrangThai FROM XeRaVao WHERE BienSo = ? ORDER BY ID DESC",
-                   (plate_number,))
+    cursor.execute("SELECT ID, TrangThai FROM XeRaVao WHERE BienSo = %s ORDER BY ID DESC LIMIT 1", (plate_number,))
     existing_entry = cursor.fetchone()
 
-    if existing_entry:
-        last_id, thoi_gian_vao, trang_thai = existing_entry
-
-        # Nếu xe đã vào nhưng chưa ra, cập nhật trạng thái thành "Xe ra"
-        if trang_thai == "Xe vào":
-            query = "UPDATE XeRaVao SET ThoiGianRa = ?, TrangThai = ? WHERE ID = ?"
-            values = (datetime.now(), "Xe ra", last_id)
-            cursor.execute(query, values)
-            db.commit()
-            print(f"Biển số {plate_number} đã được cập nhật trạng thái: Xe ra")
-            return
-
-    # Nếu xe chưa có trong hệ thống hoặc đã ra, thêm mới
-    query = "INSERT INTO XeRaVao (BienSo, ThoiGianVao, TrangThai, AnhBienSo) VALUES (?, ?, ?, ?)"
-    values = (plate_number, datetime.now(), "Xe vào", image_path)
-
-    cursor.execute(query, values)
+    if existing_entry and existing_entry["TrangThai"] == "Xe vào":
+        cursor.execute("UPDATE XeRaVao SET ThoiGianRa = %s, TrangThai = %s WHERE ID = %s",
+                       (datetime.now(), "Xe ra", existing_entry["ID"]))
+    else:
+        cursor.execute("INSERT INTO XeRaVao (BienSo, ThoiGianVao, TrangThai) VALUES (%s, %s, %s)",
+                       (plate_number, datetime.now(), "Xe vào"))
     db.commit()
-    print(f"Đã lưu biển số {plate_number} vào SQL với trạng thái: Xe vào")
 
-
-# === CALLBACK KHI NHẬN BASE64 TỪ MQTT ===
 def on_message(client, userdata, msg):
+    global latest_image, latest_plate_number
+
     try:
-        base64_string = msg.payload.decode("utf-8")  # Giải mã chuỗi base64
-        image_path = save_base64_image(base64_string)  # Lưu ảnh từ base64
+        payload = msg.payload.decode("utf-8")
+        topic = msg.topic
 
-        if image_path:
-            plate_number = detect_license_plate(image_path)  # Nhận diện biển số
-            save_or_update_sql(plate_number, image_path)  # Xử lý trạng thái xe vào/ra
+        if topic.startswith("doxe/cam/image/"):
+            image_id = topic.split("/")[-1]
+            if image_id not in image_data_buffer:
+                image_data_buffer[image_id] = ""
 
+            image_data_buffer[image_id] += payload
+
+            if "--END--" in image_data_buffer[image_id]:
+                image_data_buffer[image_id] = image_data_buffer[image_id].replace("--END--", "")
+
+                try:
+                    image_data = base64.b64decode(image_data_buffer[image_id])
+                    latest_image, latest_plate_number = detect_license_plate(image_data)
+                    save_or_update_sql(latest_plate_number)
+                    del image_data_buffer[image_id]
+                except Exception as e:
+                    print(f"❌ Lỗi giải mã ảnh: {e}")
     except Exception as e:
-        print(f"Lỗi xử lý MQTT: {e}")
+        print(f"❌ Lỗi xử lý MQTT: {e}")
 
-
-# === KHỞI ĐỘNG MQTT ===
-client = mqtt.Client()
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.on_message = on_message
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
-client.subscribe(MQTT_TOPIC)
+client.subscribe(MQTT_TOPIC_IMAGE + "/#")  # Lắng nghe cả ảnh bị chia nhỏ
 client.loop_start()
-
-# === GIAO DIỆN WEB ===
-app = Flask(__name__)
-
 
 @app.route("/")
 def index():
-    cursor.execute("SELECT ID, BienSo, ThoiGianVao, ThoiGianRa, TrangThai, AnhBienSo FROM XeRaVao ORDER BY ID DESC")
+    cursor.execute("SELECT * FROM XeRaVao ORDER BY ID DESC")
     data = cursor.fetchall()
 
-    # Xử lý dữ liệu để hiển thị ảnh
-    processed_data = []
-    for xe in data:
-        anh_bien_so = xe.AnhBienSo
-        if anh_bien_so:
-            anh_bien_so = f"data:image/jpeg;base64,{anh_bien_so}"
-        else:
-            anh_bien_so = None
+    cursor.execute(
+        "SELECT COUNT(*) AS today_in FROM XeRaVao WHERE DATE(ThoiGianVao) = CURDATE() AND TrangThai = 'Xe vào'")
+    today_in = cursor.fetchone()["today_in"]
 
-        processed_data.append({
-            "ID": xe.ID,
-            "BienSo": xe.BienSo,
-            "ThoiGianVao": xe.ThoiGianVao,
-            "ThoiGianRa": xe.ThoiGianRa,
-            "TrangThai": xe.TrangThai,
-            "AnhBienSo": anh_bien_so
-        })
+    cursor.execute(
+        "SELECT COUNT(*) AS today_out FROM XeRaVao WHERE DATE(ThoiGianRa) = CURDATE() AND TrangThai = 'Xe ra'")
+    today_out = cursor.fetchone()["today_out"]
 
-    return render_template("index.html", data=processed_data)
+    stats = {"today_in": today_in, "today_out": today_out}
 
+    return render_template("index.html", data=data, stats=stats)
+
+@app.route("/latest-image")
+def latest_image_api():
+    global latest_image
+    if latest_image is not None:
+        _, buffer = cv2.imencode('.jpg', latest_image)
+        return send_file(
+            "latest_image.jpg", mimetype='image/jpeg', as_attachment=False, data=buffer.tobytes()
+        )
+    return "Không có ảnh mới", 404
+
+@app.route("/latest-data")
+def latest_data():
+    global latest_plate_number
+    return jsonify({"plate_number": latest_plate_number})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

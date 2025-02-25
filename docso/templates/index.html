@@ -3,54 +3,76 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quản lý bãi đỗ xe</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Hệ Thống Giám Sát Bãi Đỗ Xe</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background-color: #f4f4f4; }
+        .container { width: 80%; margin: auto; padding: 20px; background: white; border-radius: 8px; box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid black; padding: 8px; text-align: center; }
+        .small-img { width: 80px; border: 2px solid black; }
+        #camera-stream { max-width: 100%; height: auto; border: 2px solid black; }
+        .status { font-size: 24px; font-weight: bold; }
+        .stat-box { display: flex; justify-content: space-around; margin-top: 20px; }
+        .stat { background: #ddd; padding: 15px; border-radius: 8px; width: 30%; }
+    </style>
 </head>
 <body>
-    <h1>Danh sách xe vào/ra</h1>
-    <table border="1">
-        <tr>
-            <th>ID</th>
-            <th>Biển số</th>
-            <th>Thời gian vào</th>
-            <th>Thời gian ra</th>
-            <th>Trạng thái</th>
-            <th>Ảnh</th>
-        </tr>
-        {% for xe in data %}
-        <tr>
-            <td>{{ xe.ID }}</td>
-            <td>{{ xe.BienSo }}</td>
-            <td>{{ xe.ThoiGianVao }}</td>
-            <td>{{ xe.ThoiGianRa if xe.ThoiGianRa else 'Chưa rời bãi' }}</td>
-            <td>{{ xe.TrangThai }}</td>
-            <td>
-                {% if xe.AnhBienSo %}
-                    <img src="data:image/png;base64,{{ xe.AnhBienSo }}" alt="Ảnh biển số" width="200">
-                {% else %}
-                    Không có ảnh
-                {% endif %}
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
+    <div class="container">
+        <h1>Hệ Thống Giám Sát Bãi Đỗ Xe</h1>
 
-    <h2>Thống kê số lần đỗ xe theo tháng/năm</h2>
-    <table border="1">
-        <tr>
-            <th>Biển số</th>
-            <th>Tháng</th>
-            <th>Năm</th>
-            <th>Số lần đỗ</th>
-        </tr>
-        {% for thongke in thongke_data %}
-        <tr>
-            <td>{{ thongke.BienSo }}</td>
-            <td>{{ thongke.Thang }}</td>
-            <td>{{ thongke.Nam }}</td>
-            <td>{{ thongke.SoLanDo }}</td>
-        </tr>
-        {% endfor %}
-    </table>
+        <h3>Hình ảnh mới nhất từ camera:</h3>
+        <img id="camera-stream" src="/latest-image" alt="Đang tải ảnh...">
+
+        <!-- 🔹 Thống kê xe ra vào -->
+        <h3>Thống kê số lượng xe</h3>
+        <div class="stat-box">
+            <div class="stat">
+                <h4>Hôm nay</h4>
+                <p>Xe vào: {{ stats.today_in }}</p>
+                <p>Xe ra: {{ stats.today_out }}</p>
+            </div>
+            <div class="stat">
+                <h4>Tháng này</h4>
+                <p>Xe vào: {{ stats.month_in }}</p>
+                <p>Xe ra: {{ stats.month_out }}</p>
+            </div>
+            <div class="stat">
+                <h4>Năm nay</h4>
+                <p>Xe vào: {{ stats.year_in }}</p>
+                <p>Xe ra: {{ stats.year_out }}</p>
+            </div>
+        </div>
+
+        <!-- 🔹 Danh sách xe -->
+        <h3>Danh sách xe trong bãi</h3>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Biển số</th>
+                <th>Thời gian vào</th>
+                <th>Thời gian ra</th>
+                <th>Trạng thái</th>
+                <th>Ảnh</th>
+            </tr>
+            {% for xe in data %}
+            <tr>
+                <td>{{ xe.ID }}</td>
+                <td>{{ xe.BienSo }}</td>
+                <td>{{ xe.ThoiGianVao }}</td>
+                <td>{{ xe.ThoiGianRa or 'Chưa rời bãi' }}</td>
+                <td>{{ xe.TrangThai }}</td>
+                <td><img class="small-img" src="{{ url_for('static', filename=xe.AnhBienSo) }}"></td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <script>
+        function updateImage() {
+            document.getElementById("camera-stream").src = "/latest-image?" + new Date().getTime();
+        }
+        setInterval(updateImage, 5000);
+    </script>
 </body>
 </html>
